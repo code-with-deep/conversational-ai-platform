@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class EntityOut(BaseModel):
@@ -34,12 +34,12 @@ class KGTripleOut(BaseModel):
     conversation_id: str
     subject: str
     predicate: str
-    object_: str
+    object_: str = Field(alias="object")
     confidence: float
     source_message_id: Optional[str] = None
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 class SummaryOut(BaseModel):

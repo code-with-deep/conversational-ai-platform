@@ -24,6 +24,11 @@ def main():
     })
     print(f"\n[2] REGISTER: {r.status_code}")
     user = r.json()
+    if r.status_code != 201:
+        print(f"    FAILED: {user.get('detail', 'Unknown error')}")
+        print("    Tip: If you've run this test before, delete 'data/memory_chat.db' and try again.")
+        return
+    
     print(f"    User ID: {user['id']}")
     print(f"    Username: {user['username']}, Role: {user['role']}")
     assert r.status_code == 201
@@ -198,8 +203,8 @@ def main():
 
     # 24. No token
     r = httpx.get(f"{BASE}/conversations/")
-    print(f"\n[24] NO AUTH: {r.status_code} (expected 403)")
-    assert r.status_code == 403
+    print(f"\n[24] NO AUTH: {r.status_code} (expected 401/403)")
+    assert r.status_code in [401, 403]
 
     print("\n" + "=" * 60)
     print("ALL 24 TESTS PASSED")

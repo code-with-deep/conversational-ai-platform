@@ -4,14 +4,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 import base64
 
+import bcrypt
 from jose import jwt, JWTError
-from passlib.context import CryptContext
 
 from app.core.config import get_settings
 
 settings = get_settings()
-
-pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def _prehash(raw_password: str) -> str:
@@ -23,11 +21,14 @@ def _prehash(raw_password: str) -> str:
 # ---------- password helpers ----------
 
 def hash_password(raw_password: str) -> str:
-    return pwd_ctx.hash(_prehash(raw_password))
+    pre = _prehash(raw_password).encode("utf-8")
+    salt = bcrypt.gensalt(rounds=12)
+    return bcrypt.hashpw(pre, salt).decode("utf-8")
 
 
 def verify_password(raw_password: str, hashed: str) -> bool:
-    return pwd_ctx.verify(_prehash(raw_password), hashed)
+    pre = _prehash(raw_password).encode("utf-8")
+    return bcrypt.checkpw(pre, hashed.encode("utf-8"))
 
 
 # ---------- jwt helpers ----------

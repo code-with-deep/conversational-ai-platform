@@ -14,7 +14,6 @@ class MessageOut(BaseModel):
     role: str
     content: str
     token_count: int
-    metadata_: Optional[dict] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

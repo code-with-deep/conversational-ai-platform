@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_db, get_current_user
+from app.core.dependencies import get_db, get_current_user, get_current_user_or_none
 from app.schemas.persona import PersonaCreate, PersonaUpdate, PersonaOut
 from app.schemas.common import SuccessResponse
 from app.services import persona_service
@@ -12,10 +12,11 @@ router = APIRouter(prefix="/personas", tags=["Personas"])
 
 @router.get("/", response_model=list[PersonaOut])
 async def list_personas(
-    current_user: User = Depends(get_current_user),
+    current_user: User | None = Depends(get_current_user_or_none),
     db: AsyncSession = Depends(get_db),
 ):
-    personas = await persona_service.list_personas(db, user_id=current_user.id)
+    user_id = current_user.id if current_user else None
+    personas = await persona_service.list_personas(db, user_id=user_id)
     return personas
 
 
@@ -36,9 +37,10 @@ async def create_persona(
 @router.get("/{persona_id}", response_model=PersonaOut)
 async def get_persona(
     persona_id: str,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    persona = await persona_service.get_persona(db, persona_id)
+    persona = await persona_service.get_persona_for_user(db, persona_id, current_user.id)
     if persona is None:
         raise HTTPException(status_code=404, detail="Persona not found")
     return persona

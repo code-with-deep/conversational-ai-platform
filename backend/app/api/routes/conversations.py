@@ -1,10 +1,11 @@
 import math
 import json
 import logging
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, BackgroundTasks
-from fastapi.responses import StreamingResponse
-from sqlalchemy import select, func
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import PlainTextResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
@@ -32,9 +33,8 @@ async def create_conversation(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # if a persona was specified, verify it exists and bump its usage
     if body.persona_id:
-        persona = await persona_service.get_persona(db, body.persona_id)
+        persona = await persona_service.get_persona_for_user(db, body.persona_id, current_user.id)
         if persona is None:
             raise HTTPException(status_code=404, detail="Persona not found")
         await persona_service.increment_usage(db, persona.id)
@@ -52,7 +52,7 @@ async def create_conversation(
 
 @router.get("/", response_model=PaginatedResponse)
 async def list_conversations(
-    search: str = Query(default=None, max_length=200),
+    search: str | None = Query(default=None, max_length=200),
     pinned: bool = Query(default=False),
     archived: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
@@ -137,28 +137,38 @@ async def send_message(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Send a message and get the AI response (non-streaming)."""
     try:
-        response_text = await message_service.send_message(
+        _response_text, assistant_message_id = await message_service.send_message(
             db, conversation_id, current_user.id, body.content,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
-    # fetch the last assistant message for the response
-    from sqlalchemy import select
     from app.models.message import Message
 
-    result = await db.execute(
-        select(Message)
-        .where(
-            Message.conversation_id == conversation_id,
-            Message.role == "assistant",
+    msg = None
+    if assistant_message_id:
+        result = await db.execute(
+            select(Message).where(Message.id == assistant_message_id)
         )
-        .order_by(Message.created_at.desc())
-        .limit(1)
-    )
-    msg = result.scalar_one_or_none()
+        msg = result.scalar_one_or_none()
+
+    if msg is None:
+        result = await db.execute(
+            select(Message)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.role == "assistant",
+            )
+            .order_by(Message.created_at.desc())
+            .limit(1)
+        )
+        msg = result.scalar_one_or_none()
+
+    if msg is None:
+        raise HTTPException(status_code=500, detail="Assistant response could not be persisted")
     return msg
 
 
@@ -170,8 +180,6 @@ async def stream_message(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Send a message and stream the AI response via SSE."""
-
     async def event_generator():
         try:
             async for chunk in message_service.stream_message(
@@ -185,6 +193,8 @@ async def stream_message(
 
         except ValueError as exc:
             yield {"event": "error", "data": json.dumps({"detail": str(exc)})}
+        except RuntimeError as exc:
+            yield {"event": "error", "data": json.dumps({"detail": str(exc)})}
         except Exception as exc:
             logger.error("Stream error: %s", exc)
             yield {"event": "error", "data": json.dumps({"detail": "Internal server error"})}
@@ -195,120 +205,46 @@ async def stream_message(
 # ---------- Phase 3: Export Endpoint ----------
 
 
+@router.get("/{conversation_id}/export")
 @router.post("/{conversation_id}/export")
 async def export_conversation(
     conversation_id: str,
+    format: Literal["json", "markdown"] = "json",
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Export a conversation with all messages, entities, triples, and summaries."""
-    from sqlalchemy import select as sel
-    from app.models.message import Message as Msg
-    from app.models.entity import Entity
-    from app.models.entity_version import EntityVersion
-    from app.models.kg_triple import KGTriple
-    from app.models.conversation_summary import ConversationSummary
+    from app.services import export_service
 
-    # verify ownership
     conv = await conversation_service.get_conversation(
         db, conversation_id, current_user.id
     )
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    # messages
-    msg_result = await db.execute(
-        sel(Msg)
-        .where(Msg.conversation_id == conversation_id)
-        .order_by(Msg.created_at.asc())
-    )
-    messages = [
-        {
-            "role": m.role,
-            "content": m.content,
-            "token_count": m.token_count,
-            "created_at": m.created_at.isoformat() if m.created_at else None,
-        }
-        for m in msg_result.scalars().all()
-    ]
+    if format == "markdown":
+        md_content = await export_service.export_to_markdown(db, conversation_id)
+        return PlainTextResponse(md_content)
 
-    # entities
-    ent_result = await db.execute(
-        sel(Entity).where(Entity.conversation_id == conversation_id)
-    )
-    entities = [
-        {
-            "name": e.name,
-            "entity_type": e.entity_type,
-            "description": e.description,
-            "mention_count": e.mention_count,
-        }
-        for e in ent_result.scalars().all()
-    ]
+    return await export_service.get_conversation_data(db, conversation_id)
 
-    # triples
-    tri_result = await db.execute(
-        sel(KGTriple).where(KGTriple.conversation_id == conversation_id)
-    )
-    triples = [
-        {
-            "subject": t.subject,
-            "predicate": t.predicate,
-            "object": t.object_,
-            "confidence": t.confidence,
-        }
-        for t in tri_result.scalars().all()
-    ]
 
-    # summaries
-    sum_result = await db.execute(
-        sel(ConversationSummary)
-        .where(ConversationSummary.conversation_id == conversation_id)
-        .order_by(ConversationSummary.version.asc())
-    )
-    summaries = [
-        {
-            "summary_text": s.summary_text,
-            "messages_covered": s.messages_covered,
-            "version": s.version,
-        }
-        for s in sum_result.scalars().all()
-    ]
-
-    return {
-        "conversation": {
-            "id": conv.id,
-            "title": conv.title,
-            "memory_type": conv.memory_type,
-            "message_count": conv.message_count,
-            "total_tokens_used": conv.total_tokens_used,
-            "created_at": conv.created_at.isoformat() if conv.created_at else None,
-        },
-        "messages": messages,
-        "entities": entities,
-        "triples": triples,
-        "summaries": summaries,
-    }
 @router.post("/import", response_model=ConversationOut)
 async def import_conversation(
     body: dict,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Import a conversation from JSON export data."""
     from app.services import import_service
     try:
         from app.models.conversation import Conversation
-        from sqlalchemy import select
+
         new_id = await import_service.import_conversation(db, current_user.id, body)
-        await db.commit()
-        
-        # return the new conversation
+        await db.flush()
+
         result = await db.execute(
             select(Conversation).where(Conversation.id == new_id)
         )
         return result.scalar_one()
     except Exception as e:
-        await db.rollback()
         logger.error("Import failed: %s", e)
         raise HTTPException(status_code=400, detail=f"Import failed: {str(e)}")

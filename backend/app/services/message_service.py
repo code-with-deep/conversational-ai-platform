@@ -31,7 +31,7 @@ async def send_message(
     conversation_id: str,
     user_id: str,
     content: str,
-) -> str:
+) -> tuple[str, str | None]:
     """Full non-streaming message flow via LangGraph."""
     initial_state: ConversationState = {
         "conversation_id": conversation_id,
@@ -42,7 +42,7 @@ async def send_message(
     graph = build_conversation_graph(db)
     final_state = await graph.ainvoke(initial_state)
 
-    return final_state["assistant_message"]
+    return final_state["assistant_message"], final_state.get("assistant_message_id")
 
 
 async def stream_message(

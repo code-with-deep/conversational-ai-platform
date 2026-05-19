@@ -10,13 +10,49 @@ from app.core.security import (
     verify_password,
     create_access_token,
     create_refresh_token,
+    create_reset_token,
     decode_token,
     hash_token,
 )
 from app.models.user import User
 from app.models.refresh_token import RefreshToken
+from app.services import email_service
 
 logger = logging.getLogger(__name__)
+ACCOUNT_NOT_REGISTERED_MESSAGE = "Account not registered. Please sign up first."
+
+
+def _normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def _normalize_username(username: str) -> str:
+    return username.strip()
+
+
+
+
+
+async def reset_password(db: AsyncSession, token: str, new_password: str) -> None:
+    try:
+        payload = decode_token(token)
+    except Exception:
+        raise ValueError("Invalid or expired reset token")
+
+    if payload.get("type") != "reset":
+        raise ValueError("Not a valid reset token")
+
+    email = payload.get("sub")
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise ValueError("User no longer exists")
+
+    user.password_hash = hash_password(new_password)
+    await revoke_all_refresh_tokens(db, user.id)
+    await db.flush()
+    logger.info("Password successfully reset for user %s", user.email)
 
 
 async def register_user(
@@ -26,12 +62,14 @@ async def register_user(
     password: str,
     full_name: str = "",
 ) -> User:
-    # check if email is already taken
+    email = _normalize_email(email)
+    username = _normalize_username(username)
+
     existing = await db.execute(
         select(User).where(User.email == email)
     )
     if existing.scalar_one_or_none():
-        raise ValueError("An account with this email already exists")
+        raise ValueError("Account with this email already exists. Please sign in.")
 
     # check username uniqueness
     existing = await db.execute(
@@ -58,10 +96,14 @@ async def authenticate_user(
     email: str,
     password: str,
 ) -> User:
-    result = await db.execute(select(User).where(User.email == email))
+    normalized_email = _normalize_email(email)
+    result = await db.execute(select(User).where(User.email == normalized_email))
     user = result.scalar_one_or_none()
 
-    if user is None or not verify_password(password, user.password_hash):
+    if user is None:
+        raise ValueError(ACCOUNT_NOT_REGISTERED_MESSAGE)
+
+    if not verify_password(password, user.password_hash):
         raise ValueError("Invalid email or password")
 
     if not user.is_active:
@@ -71,11 +113,9 @@ async def authenticate_user(
 
 
 async def issue_token_pair(db: AsyncSession, user: User) -> dict:
-    """Create an access + refresh token pair and persist the refresh hash."""
     access = create_access_token(subject=user.id, extra_claims={"role": user.role})
     refresh = create_refresh_token(subject=user.id)
 
-    # decode to get expiry and jti
     payload = decode_token(refresh)
     expires_at = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
 
@@ -87,6 +127,7 @@ async def issue_token_pair(db: AsyncSession, user: User) -> dict:
     db.add(token_record)
     await db.flush()
 
+    logger.debug("Issued new token pair for user %s", user.id)
     return {
         "access_token": access,
         "refresh_token": refresh,
@@ -95,12 +136,12 @@ async def issue_token_pair(db: AsyncSession, user: User) -> dict:
 
 
 async def refresh_tokens(db: AsyncSession, raw_refresh_token: str) -> dict:
-    """Validate the refresh token, revoke it, and issue a new pair."""
     from jose import JWTError
 
     try:
         payload = decode_token(raw_refresh_token)
-    except JWTError:
+    except Exception as exc:
+        logger.warning("Failed to decode refresh token: %s", str(exc))
         raise ValueError("Refresh token is invalid or expired")
 
     if payload.get("type") != "refresh":
@@ -118,11 +159,17 @@ async def refresh_tokens(db: AsyncSession, raw_refresh_token: str) -> dict:
     stored = result.scalar_one_or_none()
     if stored is None:
         raise ValueError("Refresh token has been revoked or does not exist")
+    # Ensure both datetimes are timezone-aware and in UTC for comparison
+    stored_expiry = stored.expires_at
+    if stored_expiry.tzinfo is None:
+        stored_expiry = stored_expiry.replace(tzinfo=timezone.utc)
+    
+    if stored_expiry <= datetime.now(timezone.utc):
+        stored.is_revoked = True
+        raise ValueError("Refresh token is expired")
 
-    # revoke the old token (rotation)
     stored.is_revoked = True
 
-    # fetch the user
     user_result = await db.execute(
         select(User).where(User.id == payload["sub"])
     )
@@ -130,12 +177,10 @@ async def refresh_tokens(db: AsyncSession, raw_refresh_token: str) -> dict:
     if user is None or not user.is_active:
         raise ValueError("User account is not valid")
 
-    # issue fresh pair
     return await issue_token_pair(db, user)
 
 
 async def revoke_refresh_token(db: AsyncSession, raw_refresh_token: str) -> None:
-    """Revoke a single refresh token (logout)."""
     token_h = hash_token(raw_refresh_token)
     result = await db.execute(
         select(RefreshToken).where(RefreshToken.token_hash == token_h)
@@ -144,3 +189,16 @@ async def revoke_refresh_token(db: AsyncSession, raw_refresh_token: str) -> None
     if stored:
         stored.is_revoked = True
         logger.info("Revoked refresh token for user %s", stored.user_id)
+
+
+async def revoke_all_refresh_tokens(db: AsyncSession, user_id: str) -> None:
+    result = await db.execute(
+        select(RefreshToken).where(
+            and_(
+                RefreshToken.user_id == user_id,
+                RefreshToken.is_revoked == False,  # noqa: E712
+            )
+        )
+    )
+    for token in result.scalars().all():
+        token.is_revoked = True

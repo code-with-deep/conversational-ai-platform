@@ -55,7 +55,15 @@ async def list_conversations(
 
     if search:
         pattern = f"%{search}%"
-        query = query.where(Conversation.title.ilike(pattern))
+        message_match_subquery = (
+            select(Message.conversation_id).where(Message.content.ilike(pattern))
+        )
+        query = query.where(
+            or_(
+                Conversation.title.ilike(pattern),
+                Conversation.id.in_(message_match_subquery),
+            )
+        )
 
     # total count before pagination
     count_q = select(func.count()).select_from(query.subquery())

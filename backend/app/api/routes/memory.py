@@ -1,8 +1,8 @@
 """Memory inspection routes — view entities, triples, summaries, and token usage."""
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, func
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_db, get_current_user
@@ -61,7 +61,11 @@ async def get_entity_versions(
     await _verify_ownership(db, conversation_id, current_user.id)
     result = await db.execute(
         select(EntityVersion)
-        .where(EntityVersion.entity_id == entity_id)
+        .join(Entity, EntityVersion.entity_id == Entity.id)
+        .where(
+            EntityVersion.entity_id == entity_id,
+            Entity.conversation_id == conversation_id,
+        )
         .order_by(EntityVersion.version.asc())
     )
     return list(result.scalars().all())
@@ -179,7 +183,7 @@ entity_search_router = APIRouter(prefix="/entities", tags=["Memory"])
 
 @entity_search_router.get("/search", response_model=list[EntityOut])
 async def search_entities(
-    q: str = "",
+    q: str = Query(default="", max_length=200),
     entity_type: str | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -192,7 +196,8 @@ async def search_entities(
     )
 
     if q:
-        query = query.where(Entity.name.ilike(f"%{q}%"))
+        sanitized = q.replace("%", "\\%").replace("_", "\\_")
+        query = query.where(Entity.name.ilike(f"%{sanitized}%"))
 
     if entity_type:
         query = query.where(Entity.entity_type == entity_type)
@@ -201,4 +206,3 @@ async def search_entities(
 
     result = await db.execute(query)
     return list(result.scalars().all())
-

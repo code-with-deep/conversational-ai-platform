@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional, Literal
 
 from pydantic import BaseModel, Field
+from app.schemas.conversation import MemoryType
 
 
 DomainType = Literal["general", "technical", "creative", "business", "education"]
@@ -13,7 +14,7 @@ class PersonaCreate(BaseModel):
     system_prompt: str = Field(min_length=10)
     personality: str = ""
     domain: DomainType = "general"
-    default_memory: str = "buffer"
+    default_memory: MemoryType = "buffer"
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
 
 
@@ -23,7 +24,7 @@ class PersonaUpdate(BaseModel):
     system_prompt: Optional[str] = None
     personality: Optional[str] = None
     domain: Optional[DomainType] = None
-    default_memory: Optional[str] = None
+    default_memory: Optional[MemoryType] = None
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
 
 

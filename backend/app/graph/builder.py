@@ -1,8 +1,4 @@
-"""LangGraph builder — compiles the nodes into an executable state machine.
-
-This module wires together all the isolated nodes using conditional edges
-and parallel execution paths.
-"""
+"""LangGraph builder — compiles the nodes into an executable state machine."""
 import logging
 from functools import partial
 
@@ -21,25 +17,6 @@ from app.graph.nodes.update_kg import update_kg
 from app.graph.nodes.refine_response import refine_response
 
 logger = logging.getLogger(__name__)
-
-
-def route_memory_updates(state: ConversationState):
-    """Determine which memory update nodes to run in parallel."""
-    memory_type = state.get("memory_type", "buffer")
-
-    routes = []
-    if memory_type in ("summary", "hybrid"):
-        routes.append("update_summary")
-    if memory_type in ("entity", "hybrid"):
-        routes.append("update_entities")
-    if memory_type == "kg":
-        routes.append("update_kg")
-
-    if not routes:
-        # buffer memory has no updates, skip directly to refine_response
-        return ["refine_response"]
-
-    return routes
 
 
 def build_conversation_graph(db: AsyncSession):

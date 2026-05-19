@@ -72,6 +72,20 @@ async def get_persona(db: AsyncSession, persona_id: str) -> Optional[Persona]:
     return result.scalar_one_or_none()
 
 
+async def get_persona_for_user(
+    db: AsyncSession,
+    persona_id: str,
+    user_id: str,
+) -> Optional[Persona]:
+    result = await db.execute(
+        select(Persona).where(
+            Persona.id == persona_id,
+            ((Persona.is_builtin == True) | (Persona.creator_id == user_id)),  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 async def create_persona(
     db: AsyncSession,
     user_id: str,

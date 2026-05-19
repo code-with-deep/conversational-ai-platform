@@ -20,3 +20,7 @@ class UserOut(BaseModel):
 class UserUpdate(BaseModel):
     full_name: Optional[str] = Field(default=None, max_length=200)
     preferences: Optional[dict] = None
+
+class UserPasswordUpdate(BaseModel):
+    current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8)

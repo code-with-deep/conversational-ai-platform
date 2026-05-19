@@ -17,6 +17,8 @@ def _get_client() -> ChatGroq:
     global _client
     if _client is None:
         settings = get_settings()
+        if not settings.groq_api_key:
+            raise RuntimeError("LLM provider is not configured. Set GROQ_API_KEY.")
         _client = ChatGroq(
             api_key=settings.groq_api_key,
             model=settings.groq_model,
@@ -27,11 +29,21 @@ def _get_client() -> ChatGroq:
     return _client
 
 
-def build_langchain_messages(messages: list[dict]) -> list:
-    """Convert our internal message format to LangChain message objects.
+def _get_client_with_temp(temperature: float) -> ChatGroq:
+    """Return a client bound to a specific temperature (no shared mutation)."""
+    base = _get_client()
+    if abs(base.temperature - temperature) < 0.001:
+        return base
+    return base.bind(temperature=temperature) if hasattr(base, "bind") else ChatGroq(
+        api_key=get_settings().groq_api_key,
+        model=get_settings().groq_model,
+        temperature=temperature,
+        streaming=True,
+    )
 
-    Each dict must have 'role' (system|user|assistant) and 'content'.
-    """
+
+def build_langchain_messages(messages: list[dict]) -> list:
+    """Convert our internal message format to LangChain message objects."""
     mapping = {
         "system": SystemMessage,
         "user": HumanMessage,
@@ -49,9 +61,7 @@ async def generate_response(
     temperature: float = 0.7,
 ) -> str:
     """Send messages to Groq and return the full response string."""
-    client = _get_client()
-    client.temperature = temperature
-
+    client = _get_client_with_temp(temperature)
     lc_messages = build_langchain_messages(messages)
     response = await client.ainvoke(lc_messages)
     return response.content
@@ -62,9 +72,7 @@ async def stream_response(
     temperature: float = 0.7,
 ) -> AsyncGenerator[str, None]:
     """Stream tokens from Groq one chunk at a time."""
-    client = _get_client()
-    client.temperature = temperature
-
+    client = _get_client_with_temp(temperature)
     lc_messages = build_langchain_messages(messages)
 
     async for chunk in client.astream(lc_messages):

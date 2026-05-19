@@ -40,8 +40,7 @@ class ConversationOut(BaseModel):
 
 
 class ConversationDetail(ConversationOut):
-    """Extended view that includes messages and memory state."""
-    messages: list[dict] = []
+    messages: list[dict] = Field(default_factory=list)
     summary: Optional[str] = None
     entity_count: int = 0
     triple_count: int = 0

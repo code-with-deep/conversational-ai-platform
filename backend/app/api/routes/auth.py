@@ -4,7 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_db, get_current_user
-from app.schemas.auth import RegisterRequest, LoginRequest, TokenPair, RefreshRequest
+from app.schemas.auth import (
+    RegisterRequest,
+    LoginRequest,
+    TokenPair,
+    RefreshRequest,
+    ResetPasswordRequest,
+)
 from app.schemas.user import UserOut
 from app.schemas.common import SuccessResponse
 from app.services import auth_service
@@ -64,3 +70,12 @@ async def logout(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
 @router.get("/me", response_model=UserOut)
 async def get_me(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+@router.post("/reset-password", response_model=SuccessResponse)
+async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    try:
+        await auth_service.reset_password(db, body.token, body.password)
+        return SuccessResponse(message="Password reset successfully")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))

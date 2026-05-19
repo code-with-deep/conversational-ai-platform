@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class EntityOut(BaseModel):
@@ -34,12 +34,17 @@ class KGTripleOut(BaseModel):
     conversation_id: str
     subject: str
     predicate: str
-    object_: str = Field(alias="object")
+    object_: str
     confidence: float
     source_message_id: Optional[str] = None
     created_at: datetime
 
-    model_config = {"from_attributes": True, "populate_by_name": True}
+    model_config = {"from_attributes": True}
+
+    @computed_field
+    @property
+    def object(self) -> str:
+        return self.object_
 
 
 class SummaryOut(BaseModel):
@@ -66,9 +71,8 @@ class TokenUsageOut(BaseModel):
 
 
 class MemoryStateOut(BaseModel):
-    """Aggregated memory state for a conversation."""
     memory_type: str
-    entities: list[EntityOut] = []
-    triples: list[KGTripleOut] = []
+    entities: list[EntityOut] = Field(default_factory=list)
+    triples: list[KGTripleOut] = Field(default_factory=list)
     summary: Optional[SummaryOut] = None
     token_usage: Optional[TokenUsageOut] = None

@@ -4,6 +4,7 @@ Allows users to see how the AI would have responded using a different memory
 strategy on the same conversation history.
 """
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -25,8 +26,8 @@ router = APIRouter(prefix="/compare", tags=["Comparison"])
 
 class CompareRequest(BaseModel):
     conversation_id: str
-    strategy_a: str = "buffer"
-    strategy_b: str = "entity"
+    strategy_a: Literal["buffer", "summary", "entity", "kg", "hybrid"] = "buffer"
+    strategy_b: Literal["buffer", "summary", "entity", "kg", "hybrid"] = "entity"
 
 
 class StrategyResult(BaseModel):
@@ -136,14 +137,17 @@ async def compare_memory_strategies(
             temperature = persona.temperature
 
     # run both strategies
-    result_a = await _simulate_strategy(
-        db, body.conversation_id, body.strategy_a,
-        system_prompt, temperature, last_user_msg.content,
-    )
-    result_b = await _simulate_strategy(
-        db, body.conversation_id, body.strategy_b,
-        system_prompt, temperature, last_user_msg.content,
-    )
+    try:
+        result_a = await _simulate_strategy(
+            db, body.conversation_id, body.strategy_a,
+            system_prompt, temperature, last_user_msg.content,
+        )
+        result_b = await _simulate_strategy(
+            db, body.conversation_id, body.strategy_b,
+            system_prompt, temperature, last_user_msg.content,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
     return CompareResponse(
         conversation_id=body.conversation_id,
